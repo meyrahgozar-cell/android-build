@@ -1,0 +1,65 @@
+name: Build APK
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      site_url:
+        description: "Optional: https address of your live site. Leave empty to use the website bundled in the app."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # the website has Persian file names (images/*.png) - keep them intact
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Gradle 8.9
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.9-bin.zip
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.9/bin" >> "$GITHUB_PATH"
+
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Build the APK
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+        run: |
+          if [ -n "$SITE_URL" ]; then
+            gradle --no-daemon --stacktrace :app:assembleRelease -PsiteUrl="$SITE_URL"
+          else
+            gradle --no-daemon --stacktrace :app:assembleRelease
+          fi
+          cp app/build/outputs/apk/release/app-release.apk HQL.apk
+
+      # downloads as a plain HQL.apk (not zipped) from the "Artifacts" section of the run
+      - name: Upload the APK
+        uses: actions/upload-artifact@v7
+        with:
+          path: HQL.apk
+          archive: false
+          if-no-files-found: error
+
+      - name: Attach the APK to a GitHub Release (tags like v1.0 only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" HQL.apk --title "HQL $GITHUB_REF_NAME" --generate-notes
